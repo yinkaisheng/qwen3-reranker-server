@@ -86,7 +86,7 @@ class Qwen3Rerankervllm(CrossEncoder):
         ]
         return messages
 
-    def compute_scores(self, pairs) -> tuple[list[float], list[float], dict[int, list[int]], dict[int, list[float]]]:
+    def compute_scores(self, pairs) -> tuple[list[float], list[int], dict[int, list[int]], dict[int, list[float]]]:
         messages: list[dict[str,str]] = [self.format_instruction(self.instruction, query, doc) for query, doc in pairs]
         messages_tokens: list[list[int]] =  self.tokenizer.apply_chat_template(
             messages, tokenize=True, padding=False, truncation=False, add_generation_prompt=False, enable_thinking=False
@@ -94,7 +94,7 @@ class Qwen3Rerankervllm(CrossEncoder):
         token_counts = [len(ele) for ele in messages_tokens]
         logger.info(f'apply_chat_template token_counts={token_counts}, max={self.max_model_length}')
         long_token_parts_counts: dict[int, list[int]] = {}
-        long_token_parts_scores: dict[int, list[int]] = {}
+        long_token_parts_scores: dict[int, list[float]] = {}
 
         long_text_index: list[int] = [index for index, count in enumerate(token_counts) if count > self.remain_capacity]
         if long_text_index:
