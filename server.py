@@ -5,6 +5,7 @@ import sys
 import time
 from typing import (Any, Callable, Deque, Dict, List, Iterable, Iterator, Sequence, Set, Tuple, Type, Union)
 import math
+import uuid
 import asyncio
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -98,23 +99,23 @@ class Qwen3Rerankervllm(CrossEncoder):
 
         long_text_index: list[int] = [index for index, count in enumerate(token_counts) if count > self.remain_capacity]
         if long_text_index:
-            extra_messages_count: dict[int, int] = {}
+            extra_messages_split_count: dict[int, int] = {}
             extra_messages: list = []
             for index in long_text_index:
                 query, long_doc = pairs[index]
                 text_parts = self.text_splitter.split_text(long_doc)
                 extra_messages.extend([self.format_instruction(self.instruction, query, doc) for doc in text_parts])
-                extra_messages_count[index] = len(text_parts)
+                extra_messages_split_count[index] = len(text_parts)
 
             extra_tokens = self.tokenizer.apply_chat_template(
                 extra_messages, tokenize=True, padding=False, truncation=False, add_generation_prompt=False, enable_thinking=False
             )
 
-            for index, extra_count in extra_messages_count.items():
+            for index, split_count in extra_messages_split_count.items():
                 extra_token = extra_tokens.pop(0)
                 messages_tokens[index] = extra_token
                 long_token_parts_counts[index] = [len(extra_token)]
-                for i in range(extra_count-1):
+                for i in range(split_count-1):
                     extra_token = extra_tokens.pop(0)
                     messages_tokens.append(extra_token)
                     long_token_parts_counts[index].append(len(extra_token))
@@ -142,10 +143,10 @@ class Qwen3Rerankervllm(CrossEncoder):
 
         if long_text_index:
             extra_scores = scores[len(pairs):]
-            for index, extra_count in extra_messages_count.items():
+            for index, split_count in extra_messages_split_count.items():
                 first_score = scores[index]
                 long_token_parts_scores[index] = [first_score]
-                for i in range(extra_count-1):
+                for i in range(split_count-1):
                     if extra_scores:
                         extra_score = extra_scores.pop(0)
                         long_token_parts_scores[index].append(extra_score)
@@ -224,7 +225,7 @@ class RerankReq(BaseModel):
     documents: List[str]
 
 class RerankResp(BaseModel):
-    code: int = 0
+    id: str = ''
     results: list[RerankScore]
 
 @app.get("/")
@@ -248,9 +249,10 @@ async def handle_root(req: Request):
 @app.post("/v1/rerank", response_model=RerankResp, response_model_exclude_none=True, summary="rerank documents", description='''
     rerank documents and return the corresponding revevance scores.''')
 async def handle_rerank(req: Request, rerank_req: RerankReq):
+    uid = f'rerank-{uuid.uuid4().hex}'
     docs_len = [len(doc) for doc in rerank_req.documents]
     total_len = sum(docs_len)
-    logger.info(f'client={req.client.host}:{req.client.port}, query={rerank_req.query}'
+    logger.info(f'client={req.client.host}:{req.client.port}, id={uid} query={rerank_req.query}'
                 f', doc_count={len(rerank_req.documents)}, total_len={total_len}, docs_len={docs_len}')
     queries = [rerank_req.query] * len(rerank_req.documents)
     pairs = list(zip(queries, rerank_req.documents))
@@ -265,7 +267,7 @@ async def handle_rerank(req: Request, rerank_req: RerankReq):
         rerank_scores[index].token_parts = token_parts
     for index, score_parts in long_token_parts_scores.items():
         rerank_scores[index].score_parts = score_parts
-    return RerankResp(code=0, results=rerank_scores)
+    return RerankResp(id=uid, results=rerank_scores)
 
 
 def file_size_to_str(size_in_bytes: int) -> str:
@@ -279,6 +281,7 @@ def file_size_to_str(size_in_bytes: int) -> str:
         return f'{size_in_bytes} Bytes'
     else:
         return f'{size_in_bytes} Byte'
+
 
 @app.get('/log/files.html', response_class=HTMLResponse, summary='日志文件列表页面', description='''''')
 async def show_log_files(request: Request):
@@ -328,6 +331,7 @@ td {
     if sys.platform != 'win32':
         table_rows.sort()
     return html % '\n'.join(table_rows)
+
 
 if __name__ == '__main__':
     import argparse
@@ -382,7 +386,7 @@ if __name__ == '__main__':
     swap_space = args.swap_space
     eager_mode = args.eager_mode
 
-    logger.info(f'server starts at {host}:{port}')
+    logger.info(f'server starts at {host}:{port}, pid={os.getpid()}')
     logger.info(f'args={args}')
 
     uvicorn.run(app, lifespan='on', host=host, port=port, workers=1,
