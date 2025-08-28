@@ -1,0 +1,17 @@
+services:
+  vllm-Qwen3-Reranker-0.6B:
+    container_name: vllm-Qwen3-Reranker-0.6B
+    restart: unless-stopped
+    image: pyapp-gcc:1.0
+    ipc: host
+    network_mode: host
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./python3.12.10:/python3.12.10
+      - ./modelscope:/modelscope
+      - ./codes:/app
+    working_dir: /app
+    entrypoint: ["/python3.12.10/bin/python", "server.py", "--port", "9994", "--gpu_memory_utilization", "0.258", "--model_path", "/modelscope/Qwen3-Reranker-0.6B"]
