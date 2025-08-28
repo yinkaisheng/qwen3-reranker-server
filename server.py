@@ -164,6 +164,7 @@ class Qwen3Rerankervllm(CrossEncoder):
     def stop(self):
         destroy_model_parallel()
 
+
 _model: Qwen3Rerankervllm = None
 
 @asynccontextmanager
@@ -232,19 +233,22 @@ class RerankResp(BaseModel):
 async def handle_root(req: Request):
     return 'Qwen3 reranker server is running!'
 
-
-@app.get("/info")
-async def handle_root(req: Request):
-    result = sutil.run_cmd(['nvidia-smi'], shell=False)
-    return {
+@app.get("/health")
+async def handle_health(req: Request, nvidia_smi: int=0):
+    result = {
+        "status": "ok",
+        "timestemp": f"{datetime.now()}",
         "model_name": model_path.split('/')[-1],
         "max_model_length": max_model_length,
         "gpu_device_count": gpu_device_count,
         "gpu_memory_utilization": gpu_memory_utilization,
         "CUDA_VISIBLE_DEVICES": os.environ.get('CUDA_VISIBLE_DEVICES', ''),
         "NVIDIA_VISIBLE_DEVICES": os.environ.get('NVIDIA_VISIBLE_DEVICES', ''),
-        "nvidia_smi": result['stdout'],
     }
+    if nvidia_smi:
+        cmd_result = sutil.run_cmd(['nvidia-smi'], shell=False)
+        result['nvidia_smi'] = cmd_result['stdout']
+    return result
 
 @app.post("/v1/rerank", response_model=RerankResp, response_model_exclude_none=True, summary="rerank documents", description='''
     rerank documents and return the corresponding revevance scores.''')
@@ -269,7 +273,6 @@ async def handle_rerank(req: Request, rerank_req: RerankReq):
         rerank_scores[index].score_parts = score_parts
     return RerankResp(id=uid, results=rerank_scores)
 
-
 def file_size_to_str(size_in_bytes: int) -> str:
     if size_in_bytes >= 1073741824:  # 1024**3
         return f'{size_in_bytes / 1073741824:.3f} GB'
@@ -281,7 +284,6 @@ def file_size_to_str(size_in_bytes: int) -> str:
         return f'{size_in_bytes} Bytes'
     else:
         return f'{size_in_bytes} Byte'
-
 
 @app.get('/log/files.html', response_class=HTMLResponse, summary='日志文件列表页面', description='''''')
 async def show_log_files(request: Request):
