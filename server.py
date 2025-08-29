@@ -87,13 +87,14 @@ class Qwen3Rerankervllm(CrossEncoder):
         ]
         return messages
 
-    def compute_scores(self, pairs) -> tuple[list[float], list[int], dict[int, list[int]], dict[int, list[float]]]:
+    def compute_scores(self, uid:str, pairs: list[tuple[str,str]]
+        ) -> tuple[list[float], list[int], dict[int, list[int]], dict[int, list[float]]]:
         messages: list[dict[str,str]] = [self.format_instruction(self.instruction, query, doc) for query, doc in pairs]
         messages_tokens: list[list[int]] =  self.tokenizer.apply_chat_template(
             messages, tokenize=True, padding=False, truncation=False, add_generation_prompt=False, enable_thinking=False
         )
         token_counts = [len(ele) for ele in messages_tokens]
-        logger.info(f'apply_chat_template token_counts={token_counts}, max={self.max_model_length}')
+        logger.info(f'apply_chat_template id={uid} token_counts={token_counts}, max={max(token_counts)}')
         long_token_parts_counts: dict[int, list[int]] = {}
         long_token_parts_scores: dict[int, list[float]] = {}
 
@@ -253,7 +254,7 @@ async def handle_health(req: Request, nvidia_smi: int=0):
 @app.post("/v1/rerank", response_model=RerankResp, response_model_exclude_none=True, summary="rerank documents", description='''
     rerank documents and return the corresponding revevance scores.''')
 async def handle_rerank(req: Request, rerank_req: RerankReq):
-    uid = f'rerank-{uuid.uuid4().hex}'
+    uid = uuid.uuid4().hex
     docs_len = [len(doc) for doc in rerank_req.documents]
     total_len = sum(docs_len)
     logger.info(f'client={req.client.host}:{req.client.port}, id={uid} query={rerank_req.query}'
@@ -264,14 +265,14 @@ async def handle_rerank(req: Request, rerank_req: RerankReq):
     scores, token_counts, long_token_parts_counts, long_token_parts_scores = await asyncio.get_running_loop(
         ).run_in_executor(thread_executor, _model.compute_scores, pairs)
     cost = time.perf_counter() - start_tick
-    logger.info(f'cost={cost:.3f}, socres={scores}')
+    logger.info(f'id={uid}, cost={cost:.3f}, socres={scores}')
     rerank_scores = [RerankScore(index=index, relevance_score=score, token_count=token_counts[index])
                       for index, score in enumerate(scores)]
     for index, token_parts in long_token_parts_counts.items():
         rerank_scores[index].token_parts = token_parts
     for index, score_parts in long_token_parts_scores.items():
         rerank_scores[index].score_parts = score_parts
-    return RerankResp(id=uid, results=rerank_scores)
+    return RerankResp(id=f'rerank-{uid}', results=rerank_scores)
 
 def file_size_to_str(size_in_bytes: int) -> str:
     if size_in_bytes >= 1073741824:  # 1024**3
