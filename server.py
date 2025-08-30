@@ -257,13 +257,13 @@ async def handle_rerank(req: Request, rerank_req: RerankReq):
     uid = uuid.uuid4().hex
     docs_len = [len(doc) for doc in rerank_req.documents]
     total_len = sum(docs_len)
-    logger.info(f'client={req.client.host}:{req.client.port}, id={uid} query={rerank_req.query}'
+    logger.info(f'client={req.client.host}:{req.client.port}, id={uid} query={rerank_req.query!r}'
                 f', doc_count={len(rerank_req.documents)}, total_len={total_len}, docs_len={docs_len}')
     queries = [rerank_req.query] * len(rerank_req.documents)
     pairs = list(zip(queries, rerank_req.documents))
     start_tick = time.perf_counter()
     scores, token_counts, long_token_parts_counts, long_token_parts_scores = await asyncio.get_running_loop(
-        ).run_in_executor(thread_executor, _model.compute_scores, pairs)
+        ).run_in_executor(thread_executor, _model.compute_scores, uid, pairs)
     cost = time.perf_counter() - start_tick
     logger.info(f'id={uid}, cost={cost:.3f}, socres={scores}')
     rerank_scores = [RerankScore(index=index, relevance_score=score, token_count=token_counts[index])
