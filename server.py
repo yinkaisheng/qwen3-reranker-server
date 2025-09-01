@@ -265,7 +265,7 @@ async def handle_rerank(req: Request, rerank_req: RerankReq):
     scores, token_counts, long_token_parts_counts, long_token_parts_scores = await asyncio.get_running_loop(
         ).run_in_executor(thread_executor, _model.compute_scores, uid, pairs)
     cost = time.perf_counter() - start_tick
-    logger.info(f'id={uid}, cost={cost:.3f}, socres={scores}')
+    logger.info(f'id={uid}, cost={cost:.3f}, scores={scores}')
     rerank_scores = [RerankScore(index=index, relevance_score=score, token_count=token_counts[index])
                       for index, score in enumerate(scores)]
     for index, token_parts in long_token_parts_counts.items():
