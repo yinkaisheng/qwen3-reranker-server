@@ -61,7 +61,7 @@ class Qwen3Rerankervllm(CrossEncoder):
             tensor_parallel_size=gpu_device_count,
             max_model_len=self.max_model_length,
             enable_prefix_caching=True,
-            distributed_executor_backend='ray',
+            # distributed_executor_backend='ray',
             gpu_memory_utilization=gpu_memory_utilization,
             swap_space=swap_space,
             # block_size=16,
