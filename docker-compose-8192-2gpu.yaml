@@ -7,7 +7,7 @@ services:
     mem_limit: 12g
     runtime: nvidia
     environment:
-      - NVIDIA_VISIBLE_DEVICES=0
+      - NVIDIA_VISIBLE_DEVICES=0,1
       - TZ=Asia/Shanghai
     volumes:
       - ./python3.12.10:/python3.12.10
@@ -20,7 +20,7 @@ services:
       - --port
       - "9995"
       - --gpu_memory_utilization
-      - "0.258"
+      - "0.1258"
       - --max_model_length
       - "8192"
       - --model_path

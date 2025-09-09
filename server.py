@@ -363,7 +363,7 @@ if __name__ == '__main__':
     RTX3090 24G gpu_memory_utilization 0.154(about 4100MB) can supoort max_model_length 10240 for 1 concurrency
 
     eager_mode=False(启动变慢，大约100秒):
-    RTX3090 24G gpu_memory_utilization 0.1448(about 4412 MB) can supoort max_model_length 8192 for 1 concurrency
+    RTX3090 24G gpu_memory_utilization 0.1448(about 4412 MB) can supoort max_model_length 8192 for 1 concurrency(2 gpu 0.125 for 2 concurrency)
     RTX3090 24G gpu_memory_utilization 0.182(about 5316 MB) can supoort max_model_length 8192 for 2 concurrency
     RTX3090 24G gpu_memory_utilization 0.258(about 7108 MB) can supoort max_model_length 8192 for 4 concurrency
 
