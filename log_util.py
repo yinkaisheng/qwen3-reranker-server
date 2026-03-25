@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# created: 2025-07-18
+# author: yinkaisheng@foxmail.com
 import os
 import sys
 import time
+import io
+import inspect
+import threading
+from datetime import datetime
+from typing import Any
 
+IsWindows = sys.platform == 'win32'
+IsPy38OrHigher = sys.version_info >= (3, 8)
+
+if IsPy38OrHigher:
+    current_thread_id = threading.get_native_id
+else:
+    current_thread_id = threading.get_ident
 
 try:
     import colorama
@@ -114,17 +126,22 @@ except Exception:
 
 
 try:
-    raise ImportError('use logging first')
+    # raise ImportError('use logging first')
 
     from loguru import logger
 
     def config_logger(logger, log_level = 'info', log_dir = 'logs', log_file = 'app.log',
                       backup_count = 15, log_to_stdout = True):
+        def add_thread_native_id(record):
+            record['extra']['thread'] = threading.get_native_id
+
+        logger.configure(patcher=add_thread_native_id)
         if log_dir and log_dir != '.':
             os.makedirs(log_dir, exist_ok=True)
         log_level = log_level.upper()
         logger.remove()   # remove the default sink of sys.stdout
         '''
+        record example:
         {
             'elapsed': datetime.timedelta(microseconds=30002),
             'exception': None,
@@ -148,7 +165,7 @@ try:
                 ': <lvl>{message}</lvl>')
             _stdout_logger_id = logger.add(sys.stdout, level=log_level, colorize=True, format=console_format)
         logger.add(f'{log_dir}/{log_file}', level=log_level, enqueue=True, rotation=f'00:00:00',
-                   retention=f'{backup_count} days', compression='zip', format=file_format)
+                   retention=backup_count, compression='zip', format=file_format)
 
 except ImportError:
 
@@ -156,6 +173,11 @@ except ImportError:
     import logging
     import logging.handlers
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format=f'%(asctime)s %(levelname)s %(filename)s,%(lineno)d {Fore.Blue}T%(thread)d{Fore.Reset} {Fore.Cyan}%(funcName)s{Fore.Reset}: %(message)s',
+        # format=f'%(asctime)s %(levelname)s %(filename)s,%(lineno)d T%(thread)d %(funcName)s: %(message)s', # no color
+    )
     logger = logging.getLogger()
 
 
@@ -208,32 +230,88 @@ except ImportError:
         )
         file_handler.setFormatter(file_formatter)
         if log_to_stdout:
-            logging.basicConfig(
-                level=log_level,
-                format=f'%(asctime)s %(levelname)s %(filename)s,%(lineno)d {Fore.Blue}T%(thread)d{Fore.Reset} {Fore.Cyan}%(funcName)s{Fore.Reset}: %(message)s',
-                # format=f'%(asctime)s %(levelname)s %(filename)s,%(lineno)d T%(thread)d %(funcName)s: %(message)s', # no color
-            )
+            pass
         else:
             for handler in logger.handlers[:]:
                 logger.removeHandler(handler)
         logger.addHandler(file_handler)
 
 
-def get_uvicorn_logging_config() -> dict:
-    '''
-    config = get_uvicorn_logging_config()
-    uvicorn.run(app, lifespan='on', host=host, port=port, workers=1, log_level='info', log_config=config)
-    '''
-    try:
-        from uvicorn.config import LOGGING_CONFIG
+if sys.stdout:
+    FileColor = Fore.DarkGreen
+    FunctionColor = Fore.DarkCyan
+    TypeColor = Fore.Cyan
+    ResetColor = Fore.Reset
+else:
+    FileColor = ''
+    FunctionColor = ''
+    TypeColor = ''
+    ResetColor = ''
 
-        LOGGING_CONFIG["formatters"]["default"]["fmt"] = '%(asctime)s.%(msecs)03d %(levelprefix)s %(message)s'
-        LOGGING_CONFIG["formatters"]["access"]["fmt"] = '%(asctime)s.%(msecs)03d %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s'
-        LOGGING_CONFIG["formatters"]["default"]["datefmt"] = '%Y-%m-%d %H:%M:%S'
-        LOGGING_CONFIG["formatters"]["access"]["datefmt"] = '%Y-%m-%d %H:%M:%S'
-        return LOGGING_CONFIG
-    except ImportError:
-        return None
+
+def printx(*values, prefix: Any = '', print_id: bool = False, sep: str = ' ', end: str = None, caller: bool = True, flush: bool = False) -> None:
+    now = datetime.now()
+    if caller:
+        frame = sys._getframe(1)
+        file_name = os.path.basename(frame.f_code.co_filename)
+        self_obj = frame.f_locals.get('self', None)
+        if self_obj:
+            timestr = f'{now.year}-{now.month:02}-{now.day:02} {now.hour:02}:{now.minute:02}:{now.second:02}.{now.microsecond // 1000:03}' \
+                f' T{current_thread_id()} {FileColor}{file_name},{frame.f_lineno}{ResetColor} {FunctionColor}{self_obj.__class__.__name__}.{frame.f_code.co_name}{ResetColor}:{prefix}'
+        else:
+            timestr = f'{now.year}-{now.month:02}-{now.day:02} {now.hour:02}:{now.minute:02}:{now.second:02}.{now.microsecond // 1000:03}' \
+                f' T{current_thread_id()} {FileColor}{file_name},{frame.f_lineno}{ResetColor} {FunctionColor}{frame.f_code.co_name}{ResetColor}:{prefix}'
+    else:
+        timestr = f'{now.year}-{now.month:02}-{now.day:02} {now.hour:02}:{now.minute:02}:{now.second:02}.{now.microsecond // 1000:03}:{prefix}'
+
+    caller_frame = inspect.currentframe().f_back
+    caller_locals = caller_frame.f_locals
+
+    output_parts = []
+    available_vars = []
+    for name, var_value in caller_locals.items():
+        if not name.startswith('__') and name != 'printx':
+            available_vars.append((var_value, name))
+
+    for val_to_find in values:
+        found_name = None
+        match_index = -1
+
+        for j, (available_val, available_name) in enumerate(available_vars):
+            if val_to_find is available_val: # Same memory address, usually means it's the same object
+                found_name = available_name
+                match_index = j
+                break
+
+        if found_name:
+            if print_id:
+                output_parts.append(f"{Fore.Cyan}{found_name}{Fore.Reset}={Fore.Green}{type(val_to_find)}{Fore.Reset},id={id(val_to_find)},{val_to_find!r}")
+            else:
+                output_parts.append(f"{Fore.Cyan}{found_name}{Fore.Reset}={Fore.Green}{type(val_to_find)}{Fore.Reset},{val_to_find!r}")
+            if match_index != -1:
+                del available_vars[match_index]
+        else:
+            output_parts.append(f"<{val_to_find!r}>")
+
+    print(timestr, "\n  ".join(output_parts), sep=sep, end=end, flush=flush)
+
+
+def log(msg: Any = '', sep: str = ' ', end: str = None, caller: bool = True, flush: bool = False, file: io.FileIO = None) -> None:
+    '''console log'''
+    now = datetime.now()
+    if caller:
+        frame = sys._getframe(1)
+        file_name = os.path.basename(frame.f_code.co_filename)
+        self_obj = frame.f_locals.get('self', None)
+        if self_obj:
+            timestr = f'{now.year}-{now.month:02}-{now.day:02} {now.hour:02}:{now.minute:02}:{now.second:02}.{now.microsecond // 1000:03}' \
+                f' T{current_thread_id()} {FileColor}{file_name},{frame.f_lineno}{ResetColor} {FunctionColor}{self_obj.__class__.__name__}.{frame.f_code.co_name}{ResetColor}:'
+        else:
+            timestr = f'{now.year}-{now.month:02}-{now.day:02} {now.hour:02}:{now.minute:02}:{now.second:02}.{now.microsecond // 1000:03}' \
+                f' T{current_thread_id()} {FileColor}{file_name},{frame.f_lineno}{ResetColor} {FunctionColor}{frame.f_code.co_name}{ResetColor}:'
+    else:
+        timestr = f'{now.year}-{now.month:02}-{now.day:02} {now.hour:02}:{now.minute:02}:{now.second:02}.{now.microsecond // 1000:03}:'
+    print(timestr, msg, sep=sep, end=end, flush=flush, file=file)
 
 
 if __name__ == '__main__':

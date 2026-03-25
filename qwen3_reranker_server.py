@@ -30,16 +30,18 @@ from vllm.inputs.data import TokensPrompt
 from sentence_transformers import CrossEncoder, SentenceTransformer
 
 import sys_util as sutil
-from log_util import logger, config_logger, get_uvicorn_logging_config
+import fastapi_util as futil
+from log_util import logger, config_logger
+import version
 
-thread_executor = ThreadPoolExecutor(max_workers=1)
+_thread_executor = ThreadPoolExecutor(max_workers=1)
 
 
 class Qwen3Rerankervllm(CrossEncoder):
     def __init__(self, model_name_or_path, instruction="Given the user query, retrieval the relevant passages",
                  max_model_length: int = 8192,
                  gpu_memory_utilization: float = 0.5):
-        logger.info(f'gpu_count={gpu_device_count}')
+        logger.info(f'gpu_count={_gpu_device_count}')
         self.instruction = instruction
         self.tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
         self.tokenizer.padding_side = "left"
@@ -58,14 +60,14 @@ class Qwen3Rerankervllm(CrossEncoder):
             allowed_token_ids=[self.true_token,self.false_token],
         )
         self.llm = LLM(model=model_name_or_path,
-            tensor_parallel_size=gpu_device_count,
+            tensor_parallel_size=_gpu_device_count,
             max_model_len=self.max_model_length,
             enable_prefix_caching=True,
             # distributed_executor_backend='ray',
             gpu_memory_utilization=gpu_memory_utilization,
-            swap_space=swap_space,
+            swap_space=args.swap_space,
             # block_size=16,
-            enforce_eager=eager_mode,
+            enforce_eager=args.eager_mode,
         )
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.remain_capacity - 200,
@@ -177,10 +179,10 @@ async def lifespan(app: FastAPI):
     logger.info(f'starts, pid={os.getpid()}')
     global _model
     start_tick = time.perf_counter()
-    _model = Qwen3Rerankervllm(model_name_or_path=model_path,
+    _model = Qwen3Rerankervllm(model_name_or_path=args.model_path,
                                instruction="Retrieval document that can answer user's query",
-                               max_model_length=max_model_length,
-                               gpu_memory_utilization=gpu_memory_utilization,
+                               max_model_length=args.max_model_length,
+                               gpu_memory_utilization=args.gpu_memory_utilization,
                                )
     logger.info(f'load model cost={time.perf_counter() - start_tick:.3f}')
 
@@ -192,11 +194,8 @@ async def lifespan(app: FastAPI):
     _model.stop()
     logger.info(f'stops, pid={os.getpid()}')
 
-_log_dir = 'logs'
-os.makedirs(_log_dir, exist_ok=True)
 
 app = FastAPIOffline(lifespan=lifespan)
-app.mount("/log/file", StaticFiles(directory=_log_dir))
 
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
@@ -237,19 +236,30 @@ async def handle_root(req: Request):
 @app.get("/health")
 async def handle_health(req: Request, nvidia_smi: int=0):
     result = {
-        "status": "ok",
         "timestemp": f"{datetime.now()}",
-        "model_name": model_path.split('/')[-1],
-        "max_model_length": max_model_length,
-        "gpu_device_count": gpu_device_count,
-        "gpu_memory_utilization": gpu_memory_utilization,
+        "model_name": args.model_path.split('/')[-1],
+        "max_model_length": args.max_model_length,
+        "gpu_device_count": _gpu_device_count,
+        "gpu_memory_utilization": args.gpu_memory_utilization,
         "CUDA_VISIBLE_DEVICES": os.environ.get('CUDA_VISIBLE_DEVICES', ''),
         "NVIDIA_VISIBLE_DEVICES": os.environ.get('NVIDIA_VISIBLE_DEVICES', ''),
     }
     if nvidia_smi:
-        cmd_result = sutil.run_cmd(['nvidia-smi'], shell=False)
-        result['nvidia_smi'] = cmd_result['stdout']
+        result['nvidia_smi'] = asyncio.get_running_loop().run_in_executor(
+            None, sutil.run_cmd, 'nvidia-smi')
     return result
+
+@app.get("/status", summary="get server status", description='get server status')
+async def handle_status(request: Request) -> dict:
+    import serverinfo
+    data = {
+        'git_date': version.GitDate,
+        'git_commit': version.GitCommit,
+        'start_time': serverinfo.StartTime,
+        'pid': os.getpid(),
+        'args': sys.argv,
+    }
+    return data
 
 @app.post("/v1/rerank", response_model=RerankResp, response_model_exclude_none=True, summary="rerank documents", description='''
     rerank documents and return the corresponding revevance scores.''')
@@ -263,7 +273,7 @@ async def handle_rerank(req: Request, rerank_req: RerankReq):
     pairs = list(zip(queries, rerank_req.documents))
     start_tick = time.perf_counter()
     scores, token_counts, long_token_parts_counts, long_token_parts_scores = await asyncio.get_running_loop(
-        ).run_in_executor(thread_executor, _model.compute_scores, uid, pairs)
+        ).run_in_executor(_thread_executor, _model.compute_scores, uid, pairs)
     cost = time.perf_counter() - start_tick
     logger.info(f'id={uid}, cost={cost:.3f}, scores={scores}')
     rerank_scores = [RerankScore(index=index, relevance_score=score, token_count=token_counts[index])
@@ -286,64 +296,15 @@ def file_size_to_str(size_in_bytes: int) -> str:
     else:
         return f'{size_in_bytes} Byte'
 
-@app.get('/log/files.html', response_class=HTMLResponse, summary='日志文件列表页面', description='''''')
-async def show_log_files(request: Request):
-    html = '''
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>Log Files</title>
-<style>
-body {
-    background-color: rgb(240,240,240);
-}
-table {
-    border-collapse: collapse;
-    font-size: 18px;
-}
-td {
-    border: 1px solid #ccc;
-    padding: 4px;
-}
-</style>
-</head>
-<body>
-<h1>Log Files</h1>
-<table>
-    <tr>
-    <th>Name</th>
-    <th>Size</th>
-    <th>Modify Time</th>
-    </tr>
-%s
-</table>
-</body>
-</html>
-'''
-    table_rows = []
-    with os.scandir('logs') as it:
-        for entry in it:
-            if entry.is_file():
-                stat = entry.stat()
-                table_rows.append(f'''    <tr>
-        <td><a href="file/{entry.name}">{entry.name}</a></td>
-        <td>{file_size_to_str(stat.st_size)}</td>
-        <td>{datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")}</td>
-    </tr>''')
-    if sys.platform != 'win32':
-        table_rows.sort()
-    return html % '\n'.join(table_rows)
-
 
 if __name__ == '__main__':
     import argparse
 
-    model_path = os.path.expanduser('~/.cache/modelscope/hub/models/Qwen/Qwen3-Reranker-0.6B')
+    _model_path = os.path.expanduser('~/.cache/modelscope/hub/models/Qwen/Qwen3-Reranker-0.6B')
     parser = argparse.ArgumentParser()
     parser.add_argument('-H', '--host', type=str, default='0.0.0.0', help='server host[0.0.0.0]')
     parser.add_argument('-p', '--port', type=int, default=9994, help='server port[9994]')
-    parser.add_argument('-mp', '--model_path', type=str, default=model_path, help=f'model path[{model_path}]')
+    parser.add_argument('-mp', '--model_path', type=str, default=_model_path, help=f'model path[{_model_path}]')
     parser.add_argument('-mml', '--max_model_length', type=int, default=8192, help='max model len[8192]')
     parser.add_argument('-gmu', '--gpu_memory_utilization', type=float, default=0.2, help='gpu memory utilization[0.2]')
     parser.add_argument('-ss', '--swap_space', type=int, default=4, help='cpu memory swap space[4]')
@@ -377,20 +338,20 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    config_logger(logger, log_to_stdout=True, log_dir=_log_dir, log_file='vllm_qwen3_reranker.log')
-    log_config = get_uvicorn_logging_config()
+    _log_dir = 'logs'
+    config_logger(logger, log_to_stdout=True, log_dir=_log_dir, log_file='qwen3_reranker.log')
 
-    host = args.host
-    port = args.port
-    model_path = args.model_path
-    max_model_length = args.max_model_length
-    gpu_memory_utilization = args.gpu_memory_utilization
-    gpu_device_count=torch.cuda.device_count()
-    swap_space = args.swap_space
-    eager_mode = args.eager_mode
+    _gpu_device_count=torch.cuda.device_count()
 
-    logger.info(f'server starts at {host}:{port}, pid={os.getpid()}')
+    logger.info(f'server starts, pid={os.getpid()}')
     logger.info(f'args={args}')
+    logger.info(f'GitDate={version.GitDate}')
+    logger.info(f'GitCommit={version.GitCommit}')
 
-    uvicorn.run(app, lifespan='on', host=host, port=port, workers=1,
-                log_level='info', log_config=log_config)
+    with open('serverinfo.py', 'wt', encoding='utf-8') as fout:
+        fout.write(f'StartTime = "{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}"\n')
+
+    futil.setup_log_router(app, _log_dir)
+
+    uvicorn.run(app, lifespan='on', host=args.host, port=args.port, workers=1,
+                log_level='info', log_config=futil.get_uvicorn_logging_config())

@@ -1,0 +1,8 @@
+{
+  "model": "Qwen3-Reranker-0.6B",
+  "query": "What's the capital of China?",
+  "documents": [
+    "Beijing is the capital of China.",
+    "Nanjing is a city of China."
+  ]
+}
