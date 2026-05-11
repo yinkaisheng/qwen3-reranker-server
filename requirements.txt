@@ -1,0 +1,10 @@
+vllm==0.10.1.1
+transformers==4.55.2
+sentence-transformers==5.1.0
+langchain==0.3.27
+fastapi==0.116.1
+fastapi-offline==1.7.4
+uvicorn==0.35.0
+pydantic==2.11.7
+loguru
+psutil==7.0.0
